@@ -160,15 +160,21 @@
       name: '@deepseek-ai/dsh-client-modules'
 
     # Owns both ends of the web transport: node half binds the gateway to the
-    # webserver under /api; browser half is the fetch/SSE client.
+    # webserver under /api; browser half is the fetch/SSE client. basicAuth
+    # arrives from --basic-auth / DSH_BASIC_AUTH; absent a value no auth gate
+    # registers and every request dispatches as before. webStartup is a
+    # row-level inject because the basicAuth expression reads it (webRuntime,
+    # which this row already injects, itself injects webStartup, so the order
+    # is safe).
     - id: connection
       name: '@deepseek-ai/dsh-client-connection'
-      inject: [webRuntime]
+      inject: [webRuntime, webStartup]
       config:
         # LAN literals derived from the active bind plus --trusted-host extras.
         # A deployment adding authorities keeps this expression and concatenates
         # its literals, for example: ['app.internal', ...ctx.webRuntime.trustedHosts].
         trustedHosts: !!js ctx.webRuntime.trustedHosts
+        basicAuth: !!js ctx.webStartup.basicAuth
 
     - id: api-remotes
       name: '@deepseek-ai/dsh-api-remotes'

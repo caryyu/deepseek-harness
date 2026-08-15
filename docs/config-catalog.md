@@ -407,12 +407,21 @@ export interface ConnectionConfig {
    * that is not a bare, canonical authority fails the plugin load.
    */
   trustedHosts?: string[]
+  /**
+   * Optional `user:pass` credentials protecting every webserver dispatch
+   * (the `/api` route, WebSocket upgrades, plugins, and static dist) behind
+   * the webserver auth gate. The first valid Basic request mints a derived
+   * session cookie the browser carries on fetch and WebSocket alike; absent
+   * a value no gate registers and every request dispatches as today. A value
+   * that is not a `user:pass` pair fails the plugin load.
+   */
+  basicAuth?: string
   /** Maximum buffered JSON body for every `/api` request. */
   maxRequestBodyBytes?: number
 }
 ```
 
-Source: [`packages/client/connection/src/index.ts:50`](../packages/client/connection/src/index.ts)
+Source: [`packages/client/connection/src/index.ts:51`](../packages/client/connection/src/index.ts)
 
 <a id="deepseek-aidsh-client-hmr"></a>
 
@@ -863,7 +872,7 @@ export interface Config {
 }
 ```
 
-Source: [`packages/host/webserver/src/index.ts:45`](../packages/host/webserver/src/index.ts)
+Source: [`packages/host/webserver/src/index.ts:65`](../packages/host/webserver/src/index.ts)
 
 <a id="deepseek-aidsh-invariants"></a>
 

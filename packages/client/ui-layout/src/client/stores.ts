@@ -17,8 +17,8 @@ import {
  * Layout store state: panel width preferences in px (0 = closed), plus the
  * narrow-viewport pair — `narrow` mirrors AppFrame's breakpoint reading
  * (viewport < SIDEBAR_AUTO_COLLAPSE) so toggleSidebar can pick semantics, and
- * `narrowExpanded` is the manual override that re-expands the auto-collapsed
- * sidebar over the squeezed center without rewriting the width preference.
+ * `narrowExpanded` is the manual override that shows the auto-hidden sidebar
+ * over the squeezed center without rewriting the width preference.
  */
 type LayoutState = { sidebar: number; details: number; narrow: boolean; narrowExpanded: boolean }
 
@@ -42,7 +42,8 @@ type LayoutActions = {
  * into the panel's contract range and never cross the open/closed line;
  * open/close transitions write 0 / the default explicitly. Below the
  * auto-collapse breakpoint (AppFrame feeds setNarrow) the sidebar toggle
- * flips the narrowExpanded override instead of the preference.
+ * flips the narrowExpanded override instead of the preference: narrow hides
+ * the sidebar entirely, so the override is the show/hide switch.
  * @returns the store handle (spec + type + identity + factory in one).
  */
 export function createLayoutStore(): EngineStoreHandle<LayoutState, LayoutActions>  {

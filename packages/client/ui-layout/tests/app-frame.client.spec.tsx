@@ -11,12 +11,13 @@
  * resizes are driven through the ResizeObserver stub.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, render } from '@testing-library/react'
+import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { useSyncExternalStore } from 'react'
 import { AppFrame } from '@deepseek-ai/dsh-client-ui-layout/src/client/AppFrame.tsx'
 import type { AppFrameProps } from '@deepseek-ai/dsh-client-ui-layout/src/client/AppFrame.tsx'
 import { SIDEBAR_COLLAPSED } from '@deepseek-ai/dsh-client-ui-layout/src/client/columns.ts'
 import { createLayoutStore } from '@deepseek-ai/dsh-client-ui-layout/src/client/stores.ts'
+import { en as layoutEn } from '@deepseek-ai/dsh-client-ui-layout/src/client/locales.ts'
 import type {
   SessionId, SessionListState, WorkspaceListState,
 } from '@deepseek-ai/dsh-client-runtime/client'
@@ -88,6 +89,7 @@ function mountFrame() {
       useSessions={useSessions}
       useWorkspaces={((sel: (s: WorkspaceListState) => unknown) => sel(workspaceState)) as never}
       SessionProvider={SessionProviderStub}
+      t={((key: string) => layoutEn[key as keyof typeof layoutEn] ?? key)}
     />
   )
   const utils = render(element())
@@ -284,25 +286,32 @@ describe('AppFrame', () => {
   })
 })
 
-describe('AppFrame — narrow-viewport auto-collapse', () => {
-  it('mounts collapsed below the breakpoint with no sidebar handle', () => {
+describe('AppFrame — narrow-viewport hide/show', () => {
+  it('mounts hidden below the breakpoint with no sidebar handle', () => {
     frameWidth = 980
     const { frame, slotCalls } = mountFrame()
-    expect(tracks(frame)).toEqual([SIDEBAR_COLLAPSED, 0])
+    expect(tracks(frame)).toEqual([0, 0])
     expect(frame.hasAttribute('data-sidebar-collapsed')).toBe(true)
-    expect(slotCalls.filter(c => c.key === 'sidebar').at(-1)!.props).toEqual({ collapsed: true, width: SIDEBAR_COLLAPSED })
+    expect(slotCalls.filter(c => c.key === 'sidebar').at(-1)!.props).toEqual({ collapsed: true, width: 0 })
     expect(frame.querySelectorAll('[class*="handle"]')).toHaveLength(0)
   })
 
-  it('narrow toggle re-expands over the squeezed center and back', () => {
+  it('floating toggle shows and hides the sidebar over the squeezed center', () => {
     frameWidth = 980
-    const { frame, instance } = mountFrame()
-    act(() => { instance.actions.toggleSidebar() })
+    const { frame, getByRole } = mountFrame()
+    const toggle = getByRole('button', { name: 'Open sidebar' })
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(frame.querySelector('[class*="sidebarColHidden"]')).toBeTruthy()
+    fireEvent.click(toggle)
     expect(tracks(frame)).toEqual([280, 0])
     expect(frame.hasAttribute('data-sidebar-collapsed')).toBe(false)
-    expect(frame.querySelectorAll('[class*="handle"]')).toHaveLength(1)
-    act(() => { instance.actions.toggleSidebar() })
-    expect(tracks(frame)).toEqual([SIDEBAR_COLLAPSED, 0])
+    expect(getByRole('button', { name: 'Collapse sidebar' }).getAttribute('aria-expanded')).toBe('true')
+    expect(frame.querySelector('[class*="sidebarColHidden"]')).toBeNull()
+    // Drag resizing stays a desktop affordance: no handle in narrow either way.
+    expect(frame.querySelectorAll('[class*="handle"]')).toHaveLength(0)
+    fireEvent.click(getByRole('button', { name: 'Collapse sidebar' }))
+    expect(tracks(frame)).toEqual([0, 0])
+    expect(frame.hasAttribute('data-sidebar-collapsed')).toBe(true)
   })
 
   it('a wide-closed preference re-expands at the contract default while narrow', () => {
@@ -316,12 +325,12 @@ describe('AppFrame — narrow-viewport auto-collapse', () => {
     expect(instance.getSnapshot().sidebar).toBe(0) // preference untouched
   })
 
-  it('shrinking across the breakpoint auto-collapses; re-widening restores the drag width', () => {
+  it('shrinking across the breakpoint hides the sidebar; re-widening restores the drag width', () => {
     const { frame, instance } = mountFrame()
     act(() => { instance.actions.setSidebar(400) })
     frameWidth = 980
     act(() => { fireResize?.(); vi.advanceTimersByTime(20) })
-    expect(tracks(frame)).toEqual([SIDEBAR_COLLAPSED, 0])
+    expect(tracks(frame)).toEqual([0, 0])
     frameWidth = 1920
     act(() => { fireResize?.(); vi.advanceTimersByTime(20) })
     expect(tracks(frame)).toEqual([400, 0])

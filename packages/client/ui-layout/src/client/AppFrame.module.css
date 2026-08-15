@@ -20,6 +20,11 @@
   .frame {
     transition: none;
   }
+
+  .sidebarToggle,
+  .sidebarColHidden {
+    transition: none;
+  }
 }
 
 .sidebarCol {
@@ -105,6 +110,54 @@
 .handle[data-side='details'][data-dragging='true']::after {
   background: var(--dsw-alias-button-floating-hover);
   border-color: var(--dsw-alias-border-l3);
+}
+
+/* Narrow drawer toggle: a floating arrow at the sidebar boundary's mid-height.
+   Hidden it sits flush at the frame's left edge (.sidebarToggleNub drops the
+   X translate at left: 0, so the whole button stays inside); shown it
+   straddles the column border. Rides the track curve so it stays on the
+   moving border during hide/show; above column content (z 10), below the
+   overlay layer (z 20). */
+.sidebarToggle {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--dsw-alias-border-l2-darkmode-thin);
+  border-radius: 999px;
+  background: var(--dsw-alias-button-floating-fill);
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+  transition:
+    left var(--ds-transition-duration-slow) var(--ds-ease-in-out),
+    transform var(--ds-transition-duration-slow) var(--ds-ease-in-out);
+}
+
+.sidebarToggle:hover {
+  background: var(--dsw-alias-button-floating-hover);
+}
+
+.sidebarToggle:focus-visible {
+  box-shadow: 0 0 0 2px var(--dsw-alias-border-l3);
+}
+
+.sidebarToggleNub {
+  transform: translateY(-50%);
+}
+
+/* Narrow-hidden sidebar: the zero-width column keeps its subtree mounted
+   (slot state survives the drawer), but its controls must not stay focusable
+   or announced. Visibility flips only after the track slide finishes, so the
+   shell's own collapse fade plays against the moving column instead of
+   vanishing instantly. */
+.sidebarColHidden {
+  visibility: hidden;
+  transition: visibility 0s linear var(--ds-transition-duration-slow);
 }
 
 .overlayLayer {

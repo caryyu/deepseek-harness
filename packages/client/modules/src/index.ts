@@ -31,6 +31,7 @@ import { Service } from '@deepseek-ai/cordis'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/cordis-plugin-loader'
 import type {} from '@deepseek-ai/dsh-host-webserver'
+import { gzipIfAccepted } from '@deepseek-ai/dsh-host-webserver'
 import { optionalStringArray, stripClientSuffix } from './client/manifest.ts'
 import type { WebBootEntry, WebBootGraph } from './client/manifest.ts'
 
@@ -564,18 +565,27 @@ export class ClientModuleRegistry extends Service {
       res.end()
       return
     }
+    let raw: Buffer
     try {
-      const body = await readFile(path)
-      res.writeHead(200, {
-        'content-type': isSourceMap ? 'application/json; charset=utf-8' : 'text/javascript; charset=utf-8',
-        'cache-control': 'no-cache',
-      })
-      res.end(body)
+      raw = await readFile(path)
     } catch {
       // Registered but unreadable (bundle not built yet): loud 404 beats a silent SPA-fallback HTML page.
       res.writeHead(404)
       res.end()
+      return
     }
+    const { body, encoding } = await gzipIfAccepted(req.headers['accept-encoding'], raw)
+    res.writeHead(200, {
+      'content-type': isSourceMap ? 'application/json; charset=utf-8' : 'text/javascript; charset=utf-8',
+      // The bundle URL is content-addressed by its rev query, so the body
+      // may be pinned forever; the map URL carries no rev and must
+      // revalidate so a rebuild reaches DevTools.
+      'cache-control': isSourceMap ? 'no-cache' : 'public, max-age=31536000, immutable',
+      'vary': 'accept-encoding',
+      ...(encoding === undefined ? {} : { 'content-encoding': encoding }),
+      'content-length': String(body.length),
+    })
+    res.end(body)
   }
 }
 

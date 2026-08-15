@@ -4,6 +4,8 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { gzipIfAccepted } from '@deepseek-ai/dsh-host-webserver'
+import { AUTHENTICATED, isAuthenticated } from './basic-auth.ts'
 
 /** Default carrier cap for all HTTP RPC bodies: sized for the default
  * aggregate image limit (100 MiB) after base64 expansion plus envelope
@@ -23,7 +25,10 @@ export interface FetchHandler {
 
 /**
  * Bridge one node:http request to the fetch-shaped handler (client close
- * aborts; SSE bodies stream out chunk by chunk).
+ * aborts; SSE bodies stream out chunk by chunk). Unary JSON-RPC responses are
+ * fully buffered, so they are gzip-compressed when the client's
+ * `Accept-Encoding` permits it; SSE streams and binary downloads pass through
+ * unchanged.
  * @param req - incoming node:http request (fully read before dispatch).
  * @param res - node:http response the bridge writes and owns to completion.
  * @param apiHandler - fetch-shaped API carrier the request is dispatched to.
@@ -72,7 +77,30 @@ export async function bridge(
     ...chunks.length > 0 ? { body: Buffer.concat(chunks) } : {},
     signal: abort.signal,
   })
+  // The auth gate's stamp rides the node request; hand it to the fetch-shaped
+  // handler so downstream privileged-method checks see the authentication.
+  if (isAuthenticated(req)) {
+    ;(request as unknown as { [AUTHENTICATED]?: true })[AUTHENTICATED] = true
+  }
   const response = await apiHandler.fetch(request)
+  // Unary JSON-RPC responses are fully buffered (Response.json); compress
+  // them when the client permits gzip. SSE streams (text/event-stream) and
+  // binary downloads (application/zip exports) stream through untouched.
+  const contentType = response.headers.get('content-type')
+  if (contentType !== null && contentType.startsWith('application/json')) {
+    const chunks: Buffer[] = []
+    if (response.body !== null) {
+      for await (const chunk of response.body) chunks.push(Buffer.from(chunk))
+    }
+    const { body, encoding } = await gzipIfAccepted(req.headers['accept-encoding'], Buffer.concat(chunks))
+    const headers = Object.fromEntries(response.headers.entries())
+    if (encoding !== undefined) headers['content-encoding'] = encoding
+    headers['vary'] = 'accept-encoding'
+    headers['content-length'] = String(body.length)
+    res.writeHead(response.status, headers)
+    res.end(body)
+    return
+  }
   res.writeHead(response.status, Object.fromEntries(response.headers.entries()))
   if (response.body === null) {
     res.end()

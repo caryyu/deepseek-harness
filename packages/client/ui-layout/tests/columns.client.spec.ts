@@ -27,6 +27,18 @@ describe('computeColumns', () => {
       .toEqual({ sidebar: SIDEBAR_COLLAPSED, center: 1920 - SIDEBAR_COLLAPSED, details: 0 })
   })
 
+  it('a caller-supplied closed width replaces the rail (narrow hides entirely)', () => {
+    // Narrow hidden: closed sidebar resolves to a zero-width track, so center
+    // takes the whole viewport (details auto-closes at these widths).
+    expect(computeColumns(980, closed(300), closed(360), 0))
+      .toEqual({ sidebar: 0, center: 980, details: 0 })
+    // An open preference ignores the closed width and clamps normally.
+    expect(computeColumns(980, open(SIDEBAR_DEFAULT), closed(360), 0))
+      .toEqual({ sidebar: SIDEBAR_DEFAULT, center: 700, details: 0 })
+    // The default remains the rail for callers that do not pass the width.
+    expect(computeColumns(980, closed(300), closed(360)).sidebar).toBe(SIDEBAR_COLLAPSED)
+  })
+
   it('preferences beyond the clamp range are clamped before solving', () => {
     const cols = computeColumns(1920, open(9999), open(1))
     expect(cols.sidebar).toBe(420)

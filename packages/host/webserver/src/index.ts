@@ -1,11 +1,12 @@
 /**
  * @deepseek-ai/dsh-host-webserver — Web route-registration plugin: a node:http
- * server plus the `webServer` service (HTTP and upgrade route registries,
- * index transform taps, and the single fallback seat for everything no route
- * claims). Knows no harness concepts and serves no files; the composing
- * application's frontend plugin owns dist serving through the fallback hook.
- * Web shape only — Electron loads dist over file:// and carries fetch over an
- * IPC bridge. This package never prints: the URL line belongs to the shell.
+ * server plus the `webServer` service (HTTP and upgrade route registries, an
+ * optional request auth gate, index transform taps, and the single fallback
+ * seat for everything no route claims). Knows no harness concepts and serves
+ * no files; the composing application's frontend plugin owns dist serving
+ * through the fallback hook. Web shape only — Electron loads dist over file://
+ * and carries fetch over an IPC bridge. This package never prints: the URL
+ * line belongs to the shell.
  */
 
 import { createServer } from 'node:http'
@@ -41,6 +42,25 @@ export interface WebUpgradeRoute {
   handler: (req: IncomingMessage, socket: Duplex, head: Buffer) => void | Promise<void>
 }
 
+/**
+ * The optional request auth gate: the single seat deciding whether a request
+ * may reach any route. Runs before every HTTP request dispatch and before
+ * every upgrade dispatch, so a registered gate also shields the fallback
+ * (static dist) and 404 answers. The gate itself owns the credential
+ * semantics; the server owns the rejection protocol — returning false answers
+ * HTTP with 401 plus `WWW-Authenticate` and destroys upgrade sockets.
+ * @param req - the incoming request.
+ * @param res - the HTTP response for request dispatch; undefined on the
+ * upgrade path (a gate that issues artifacts such as cookies may set them on
+ * `res` before returning true; upgrade dispatches never carry a response, so
+ * they must not depend on it).
+ * @returns true to dispatch the request, false to reject it.
+ */
+export type WebAuthCheck = (req: IncomingMessage, res?: ServerResponse) => boolean | Promise<boolean>
+
+/** The WWW-Authenticate challenge the server answers rejected HTTP requests with. */
+const BASIC_CHALLENGE = 'Basic realm="dsh"'
+
 /** Gateway config: the listen address. */
 export interface Config {
   /** Listen host; the two supported values are loopback and all-interfaces. */
@@ -68,6 +88,7 @@ export class WebServer extends Service {
   private readonly upgradedSockets = new Set<Duplex>()
   private readonly indexTaps: ((html: string) => string)[] = []
   private fallback: WebRoute['handler'] | undefined
+  private auth: WebAuthCheck | undefined
   private server!: Server
   private listenedPort!: number
 
@@ -115,6 +136,21 @@ export class WebServer extends Service {
   }
 
   /**
+   * Register the request auth gate. One owner only — a second registration
+   * throws, because two gates cannot compose. Absent a gate every request
+   * dispatches as today.
+   * @param check - the gate deciding dispatch per request.
+   * @returns the disposer removing the gate.
+   */
+  registerAuth(check: WebAuthCheck): () => void {
+    if (this.auth !== undefined) {
+      throw new Error('webserver: auth gate already registered')
+    }
+    this.auth = check
+    return () => { this.auth = undefined }
+  }
+
+  /**
    * Claim the fallback seat: the handler answering every request no named
    * route matches (the SPA dist server in the shipped Web composition). One
    * owner only — a second registration throws, because two fallbacks cannot
@@ -147,6 +183,12 @@ export class WebServer extends Service {
   /** Listen; resolves once the socket is bound (rejection = FAILED fiber). */
   async [Service.init](): Promise<void> {
     const handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+      const auth = this.auth
+      if (auth !== undefined && !(await auth(req, res))) {
+        res.writeHead(401, { 'www-authenticate': BASIC_CHALLENGE })
+        res.end()
+        return
+      }
       /* v8 ignore next -- `?? '/'` arm: node:http always sets url on server
       requests; the field is only optional on the client-side IncomingMessage type */
       const rawPath = new URL(req.url ?? '/', 'http://x').pathname
@@ -188,29 +230,42 @@ export class WebServer extends Service {
         socket.off('error', onError)
         this.upgradedSockets.delete(socket)
       })
-      let route: WebUpgradeRoute | undefined
-      try {
-        /* v8 ignore next -- node:http always sets url on server requests. */
-        route = this.upgrades.get(new URL(req.url ?? '/', 'http://x').pathname)
-      } catch (error) {
-        this.ctx.logger.warn(error instanceof Error ? error : new Error(String(error)))
-        socket.destroy()
-        return
-      }
-      if (route === undefined) {
-        socket.destroy()
-        return
-      }
-      this.upgradedSockets.add(socket)
-      try {
-        Promise.resolve(route.handler(req, socket, head)).catch((error: unknown) => {
+      const dispatch = (): void => {
+        let route: WebUpgradeRoute | undefined
+        try {
+          /* v8 ignore next -- node:http always sets url on server requests. */
+          route = this.upgrades.get(new URL(req.url ?? '/', 'http://x').pathname)
+        } catch (error) {
           this.ctx.logger.warn(error instanceof Error ? error : new Error(String(error)))
           socket.destroy()
-        })
-      } catch (error) {
-        this.ctx.logger.warn(error instanceof Error ? error : new Error(String(error)))
-        socket.destroy()
+          return
+        }
+        if (route === undefined) {
+          socket.destroy()
+          return
+        }
+        this.upgradedSockets.add(socket)
+        try {
+          Promise.resolve(route.handler(req, socket, head)).catch((error: unknown) => {
+            this.ctx.logger.warn(error instanceof Error ? error : new Error(String(error)))
+            socket.destroy()
+          })
+        } catch (error) {
+          this.ctx.logger.warn(error instanceof Error ? error : new Error(String(error)))
+          socket.destroy()
+        }
       }
+      // The auth gate runs before upgrade dispatch too; a rejected or failed
+      // gate drops the socket (an upgrade has no HTTP response to challenge).
+      const auth = this.auth
+      if (auth === undefined) {
+        dispatch()
+        return
+      }
+      Promise.resolve(auth(req, undefined)).then((ok) => {
+        if (ok) dispatch()
+        else socket.destroy()
+      }, () => { socket.destroy() })
     })
 
     await new Promise<void>((resolve, reject) => {
@@ -264,3 +319,5 @@ export class WebServer extends Service {
 }
 
 export default WebServer
+export { gzipIfAccepted } from './encoding.ts'
+export type { GzipResult } from './encoding.ts'

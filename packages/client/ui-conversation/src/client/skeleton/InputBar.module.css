@@ -303,12 +303,14 @@
 }
 
 .trailing {
-  flex: none;
-  /* Wrap keeps the left mode chips and the right controls apart when the card
-     runs out of row width: the trailing group (model + send) moves to its own
-     line instead of the left group shrinking until its chip overlaps the
-     model trigger (external:107). The auto margin re-anchors it right on the
-     wrapped line; on a single line space-between already pins it right. */
+  /* Shrinkable (tools-side chips already are): on a narrow row the model
+     seat and any right-side items give up width so the send button stays
+     inside the card. The model trigger truncates its name with ellipsis as
+     it loses width — the shrink is what lets that ellipsis engage.
+     margin-left: auto keeps the trailing group right-aligned on both single
+     and wrapped lines; flex-wrap on .row lets it move to its own line when
+     the card runs out of width (external:107). */
+  flex: 0 1 auto;
   margin-left: auto;
   gap: 12px;
 }

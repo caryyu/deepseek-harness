@@ -78,6 +78,15 @@ register(route: WebRoute): () => void
 registerUpgrade(route: WebUpgradeRoute): () => void
 
 /**
+ * Register the request auth gate. One owner only — a second registration
+ * throws, because two gates cannot compose. Absent a gate every request
+ * dispatches as today.
+ * @param check - the gate deciding dispatch per request.
+ * @returns the disposer removing the gate.
+ */
+registerAuth(check: WebAuthCheck): () => void
+
+/**
  * Claim the fallback seat: the handler answering every request no named
  * route matches (the SPA dist server in the shipped Web composition). One
  * owner only — a second registration throws, because two fallbacks cannot
@@ -104,5 +113,5 @@ tapIndex(transform: (html: string) => string): () => void
 applyIndexTaps(html: string): string
 ```
 
-Source: [`packages/host/webserver/src/index.ts:59`](../../packages/host/webserver/src/index.ts)
+Source: [`packages/host/webserver/src/index.ts:79`](../../packages/host/webserver/src/index.ts)
 <!-- END GENERATED cordis-surface -->

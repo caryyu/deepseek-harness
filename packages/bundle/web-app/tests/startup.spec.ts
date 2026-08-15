@@ -11,7 +11,7 @@ import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
 import { internals, provideCmdline } from '@deepseek-ai/dsh-cmdline'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { apply, WEB_STARTUP_SERVICE, type WebStartupValues } from '../src/startup.ts'
 
 /** What one fixture boot observed. */
@@ -25,6 +25,7 @@ const disposers: (() => Promise<void>)[] = []
 
 afterEach(async () => {
   for (const dispose of disposers.splice(0)) await dispose()
+  vi.unstubAllEnvs()
   internals.stdout = process.stdout
   internals.stderr = process.stderr
 })
@@ -88,6 +89,7 @@ export const apply = ctx => globalThis.__webStartupApply(ctx)
 
 describe('web command-line provider', () => {
   it('publishes each flag and releases direct service expressions', async () => {
+    vi.stubEnv('DSH_BASIC_AUTH', '')
     const { values, observed } = await bootProvider([
       '--host', '127.0.0.1',
       '--no-open',
@@ -106,6 +108,7 @@ describe('web command-line provider', () => {
   })
 
   it('leaves deployment values to each consumer when flags omit them', async () => {
+    vi.stubEnv('DSH_BASIC_AUTH', '')
     const { values, observed } = await bootProvider([])
     expect(values).toEqual({ openBrowser: true, trustedHosts: [] })
     expect(observed.readerConfig).toEqual({
@@ -114,6 +117,21 @@ describe('web command-line provider', () => {
       port: 3080,
       trustedHosts: [],
     })
+  })
+
+  it('prefers the flag over the DSH_BASIC_AUTH environment variable', async () => {
+    vi.stubEnv('DSH_BASIC_AUTH', 'env:pass')
+    const { values } = await bootProvider(['--basic-auth', 'flag:pass'])
+    expect(values).toEqual({ basicAuth: 'flag:pass', trustedHosts: [] })
+  })
+
+  it('falls back to the environment variable and treats an empty value as unset', async () => {
+    vi.stubEnv('DSH_BASIC_AUTH', 'env:pass')
+    const fromEnv = await bootProvider([])
+    expect(fromEnv.values).toEqual({ basicAuth: 'env:pass', trustedHosts: [] })
+    vi.stubEnv('DSH_BASIC_AUTH', '')
+    const unset = await bootProvider([])
+    expect(unset.values).toEqual({ trustedHosts: [] })
   })
 
   it('prints its own help and leaves the consumer pending', async () => {

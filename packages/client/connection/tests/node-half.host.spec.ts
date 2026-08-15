@@ -9,14 +9,15 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { ApiProxy } from '@deepseek-ai/dsh-host-apiproxy/api'
 import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import { RpcId, type ClientRequest } from '@deepseek-ai/dsh-host-apiproxy/api'
-import type { WebServer, WebRoute, WebUpgradeRoute } from '@deepseek-ai/dsh-host-webserver'
+import type { WebServer, WebRoute, WebUpgradeRoute, WebAuthCheck } from '@deepseek-ai/dsh-host-webserver'
 import { API_PATH, apply, HOST_EVENTS_PATH, inject, MUX_EVENTS_PATH, type HostConnectionHandle } from '../src/index.ts'
 
-/** Structural webServer fake recording both route registries. */
+/** Structural webServer fake recording both route registries and the auth gate. */
 function fakeHttpServer(
   routes: WebRoute[],
   upgrades: WebUpgradeRoute[],
-): Pick<WebServer, 'register' | 'registerUpgrade' | 'tapIndex' | 'port'> {
+  authGates: WebAuthCheck[] = [],
+): Pick<WebServer, 'register' | 'registerUpgrade' | 'tapIndex' | 'port' | 'registerAuth'> {
   return {
     register(route) {
       if (routes.some(candidate => candidate.kind === route.kind && candidate.path === route.path)) {
@@ -28,6 +29,10 @@ function fakeHttpServer(
     registerUpgrade(route) {
       upgrades.push(route)
       return () => { upgrades.splice(upgrades.indexOf(route), 1) }
+    },
+    registerAuth(gate) {
+      authGates.push(gate)
+      return () => { authGates.splice(authGates.indexOf(gate), 1) }
     },
     tapIndex: () => () => {},
     port: 0,
@@ -56,12 +61,14 @@ function fakeRawPost(headers: Record<string, string>, url: string, body: string)
 }
 
 /** Response recorder compatible with both the fence's short-circuit and the bridge. */
-function fakeResponse(): { response: ServerResponse; state: { status?: number; body?: unknown } } {
-  const state: { status?: number; body?: unknown } = {}
+type FakeResponseState = { status?: number; body?: unknown; headers?: Record<string, string | string[]> }
+function fakeResponse(): { response: ServerResponse; state: FakeResponseState } {
+  const state: FakeResponseState = {}
   const chunks: Buffer[] = []
   const response = Object.assign(new EventEmitter(), {
     writableEnded: false,
     writeHead(value: number) { state.status = value; return this },
+    setHeader(name: string, value: string | string[]) { (state.headers ??= {})[name] = value; return this },
     write(value: string | Uint8Array) { chunks.push(Buffer.from(value)); return true },
     end(this: { writableEnded: boolean }, value?: unknown) {
       if (typeof value === 'string' || value instanceof Uint8Array) chunks.push(Buffer.from(value))
@@ -74,19 +81,21 @@ function fakeResponse(): { response: ServerResponse; state: { status?: number; b
   return { response, state }
 }
 
-async function mounted(config?: { trustedHosts?: string[] }): Promise<{
+async function mounted(config?: { trustedHosts?: string[]; basicAuth?: string }): Promise<{
   routes: WebRoute[]
   upgrades: WebUpgradeRoute[]
+  authGates: WebAuthCheck[]
   dispose: () => Promise<void>
 }> {
   const ctx = new Context()
   const routes: WebRoute[] = []
   const upgrades: WebUpgradeRoute[] = []
-  ctx.provide('webServer', fakeHttpServer(routes, upgrades) as WebServer)
+  const authGates: WebAuthCheck[] = []
+  ctx.provide('webServer', fakeHttpServer(routes, upgrades, authGates) as WebServer)
   ctx.provide('apiProxy', {} as unknown as ApiProxy)
   const fiber = ctx.plugin({ inject: [...inject], apply }, config)
   await fiber.await()
-  return { routes, upgrades, dispose: () => fiber.dispose() }
+  return { routes, upgrades, authGates, dispose: () => fiber.dispose() }
 }
 
 describe('connection node half', () => {
@@ -121,6 +130,36 @@ describe('connection node half', () => {
     expect(routes[0]).toMatchObject({ kind: 'prefix', path: API_PATH })
     expect(upgrades.map(route => route.path)).toEqual([MUX_EVENTS_PATH, HOST_EVENTS_PATH])
     await dispose()
+    expect(routes).toHaveLength(0)
+    expect(upgrades).toHaveLength(0)
+  })
+
+  it('registers the auth gate for a configured basicAuth and removes it with the fiber', async () => {
+    const { authGates, dispose } = await mounted({ basicAuth: 'alice:secret' })
+    expect(authGates).toHaveLength(1)
+    const gate = authGates[0]!
+    const denied = fakeResponse()
+    expect(await gate(fakeRequest({ host: '127.0.0.1:3080' }), denied.response)).toBe(false)
+    expect(denied.state.status).toBeUndefined() // the gate judges; the webserver answers 401
+    const granted = fakeResponse()
+    const ok = await gate(fakeRequest({
+      host: '127.0.0.1:3080',
+      authorization: `Basic ${Buffer.from('alice:secret').toString('base64')}`,
+    }), granted.response)
+    expect(ok).toBe(true)
+    expect(granted.state.headers?.['set-cookie']).toBeDefined()
+    await dispose()
+    expect(authGates).toHaveLength(0)
+  })
+
+  it('fails the load on a basicAuth value that is not a user:pass pair', async () => {
+    const ctx = new Context()
+    const routes: WebRoute[] = []
+    const upgrades: WebUpgradeRoute[] = []
+    ctx.provide('webServer', fakeHttpServer(routes, upgrades) as WebServer)
+    ctx.provide('apiProxy', {} as unknown as ApiProxy)
+    const fiber = ctx.plugin({ inject: [...inject], apply }, { basicAuth: 'nocolon' })
+    await expect(fiber).rejects.toThrow(/must be "user:pass"/)
     expect(routes).toHaveLength(0)
     expect(upgrades).toHaveLength(0)
   })
@@ -189,6 +228,43 @@ describe('connection node half', () => {
     const read = fakeResponse()
     await routes[0]!.handler(fakeRequest({ host: 'harness.example' }), read.response)
     expect(read.state.status).not.toBe(403)
+    await dispose()
+  })
+
+  it('lets an authenticated request reach privileged methods', async () => {
+    // The same privileged method set 403s for an anonymous caller on a
+    // declared non-loopback authority, but passes once the auth gate stamped
+    // the request — the gate is the deployment's real authentication layer.
+    const { routes, authGates, dispose } = await mounted({
+      basicAuth: 'alice:secret',
+      trustedHosts: ['harness.example'],
+    })
+    const gate = authGates[0]!
+    for (const method of [
+      'host.pickDirectory', 'host.openPath',
+      'settings.describe', 'settings.openDocument', 'settings.update', 'settings.replace', 'settings.mutate',
+      'credentials.describe', 'credentials.set', 'credentials.unset',
+      'llm.discoverModels',
+      'agentPreset.read', 'agentPreset.copy', 'agentPreset.openDocument', 'agentPreset.remove',
+    ]) {
+      const granted = fakeRequest({
+        host: 'harness.example',
+        authorization: `Basic ${Buffer.from('alice:secret').toString('base64')}`,
+      }, `${API_PATH}/${method}`)
+      const gateResponse = fakeResponse()
+      expect(await gate(granted, gateResponse.response)).toBe(true)
+      const outcome = fakeResponse()
+      await routes[0]!.handler(granted, outcome.response)
+      // Past the privileged pin, the empty apiProxy answers carrier-level 404.
+      expect(outcome.state.status).toBe(404)
+    }
+    // An unauthenticated caller on the same authority stays 403.
+    const denied = fakeResponse()
+    await routes[0]!.handler(
+      fakeRequest({ host: 'harness.example' }, `${API_PATH}/settings.describe`),
+      denied.response,
+    )
+    expect(denied.state.status).toBe(403)
     await dispose()
   })
 

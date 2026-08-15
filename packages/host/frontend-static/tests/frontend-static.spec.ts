@@ -7,9 +7,12 @@
  */
 
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { get as httpGet } from 'node:http'
+import type { IncomingHttpHeaders } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { gunzipSync } from 'node:zlib'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
@@ -35,6 +38,8 @@ async function loadComposition(): Promise<Context> {
   const distIndex = join(dist, 'index.html')
   await writeFile(distIndex, '<head></head><body>shell</body>')
   await writeFile(join(dist, 'app.js'), 'export {}')
+  await writeFile(join(dist, 'app-abcdefgh.js'), 'export const hashed = true')
+  await writeFile(join(dist, 'font-abcdefgh.woff2'), 'FONT')
   await writeFile(join(dist, 'blob.bin'), 'BLOB')
   await writeFile(join(dist, 'manifest.webmanifest'), '{}')
   const configPath = join(root, 'cordis.yml')
@@ -83,6 +88,22 @@ async function request(port: number, path: string, init?: RequestInit): Promise<
   }
 }
 
+/** Raw GET with explicit headers; the node http client never auto-decompresses. */
+async function rawGet(
+  port: number, path: string, headers: Record<string, string>,
+): Promise<{ status: number; headers: IncomingHttpHeaders; body: Buffer }> {
+  return await new Promise((resolve, reject) => {
+    const req = httpGet({ host: '127.0.0.1', port, path, headers }, (res) => {
+      const chunks: Buffer[] = []
+      res.on('data', (chunk: Buffer) => { chunks.push(chunk) })
+      res.on('end', () => {
+        resolve({ status: res.statusCode ?? 0, headers: res.headers, body: Buffer.concat(chunks) })
+      })
+    })
+    req.on('error', reject)
+  })
+}
+
 describe('real Loader composition', () => {
   it('serves the dist with SPA fallback, taps, traversal rejection, and method gating', { timeout: 60_000 }, async () => {
     const loaded = await loadComposition()
@@ -106,6 +127,36 @@ describe('real Loader composition', () => {
     // Unknown extension ships as octet-stream.
     expect(await request(port, '/blob.bin')).toMatchObject({ status: 200, type: 'application/octet-stream', body: 'BLOB' })
 
+    // Content-hashed assets (vite build output) are pinned; unhashed files
+    // (public/ copies) and index responses revalidate.
+    const hashed = await rawGet(port, '/app-abcdefgh.js', { 'accept-encoding': 'identity' })
+    expect(hashed.status).toBe(200)
+    expect(hashed.headers['cache-control']).toBe('public, max-age=31536000, immutable')
+    expect(hashed.headers['vary']).toBe('accept-encoding')
+    expect(hashed.body.toString('utf8')).toBe('export const hashed = true')
+    const hashedGzip = await rawGet(port, '/app-abcdefgh.js', { 'accept-encoding': 'gzip' })
+    expect(hashedGzip.headers['content-encoding']).toBe('gzip')
+    expect(hashedGzip.headers['cache-control']).toBe('public, max-age=31536000, immutable')
+    expect(Number(hashedGzip.headers['content-length'])).toBe(hashedGzip.body.length)
+    expect(gunzipSync(hashedGzip.body).toString('utf8')).toBe('export const hashed = true')
+
+    const unhashed = await rawGet(port, '/app.js', { 'accept-encoding': 'gzip' })
+    expect(unhashed.headers['cache-control']).toBe('no-cache')
+    expect(unhashed.headers['content-encoding']).toBe('gzip')
+    expect(gunzipSync(unhashed.body).toString('utf8')).toBe('export const rebuilt = true')
+
+    const manifest = await rawGet(port, '/manifest.webmanifest', { 'accept-encoding': 'identity' })
+    expect(manifest.headers['cache-control']).toBe('no-cache')
+
+    // Fonts and unknown binaries are cache-pinned by name but never compressed.
+    const font = await rawGet(port, '/font-abcdefgh.woff2', { 'accept-encoding': 'gzip' })
+    expect(font.headers['cache-control']).toBe('public, max-age=31536000, immutable')
+    expect(font.headers['content-encoding']).toBeUndefined()
+    expect(font.body.toString('utf8')).toBe('FONT')
+    const blob = await rawGet(port, '/blob.bin', { 'accept-encoding': 'gzip' })
+    expect(blob.headers['cache-control']).toBe('no-cache')
+    expect(blob.headers['content-encoding']).toBeUndefined()
+
     // `/`, the index path, and any miss all render index.html (SPA routing)
     // through the registered index taps.
     const untap = server.tapIndex(html => html.replace('<head>', '<head><script>window.__T__=1</script>'))
@@ -117,6 +168,15 @@ describe('real Loader composition', () => {
     }
     untap()
     expect((await request(port, '/')).body).not.toContain('__T__')
+
+    // Index responses revalidate (they carry the boot manifest) and compress.
+    const indexGzip = await rawGet(port, '/', { 'accept-encoding': 'gzip' })
+    expect(indexGzip.headers['cache-control']).toBe('no-cache')
+    expect(indexGzip.headers['content-encoding']).toBe('gzip')
+    expect(gunzipSync(indexGzip.body).toString('utf8')).toContain('shell')
+    const indexRaw = await rawGet(port, '/', { 'accept-encoding': 'identity' })
+    expect(indexRaw.headers['content-encoding']).toBeUndefined()
+    expect(indexRaw.body.toString('utf8')).toContain('shell')
 
     // Traversal outside the dist root is 403; non-GET/HEAD is 405.
     expect((await request(port, '/..%2f..%2fetc%2fpasswd')).status).toBe(403)

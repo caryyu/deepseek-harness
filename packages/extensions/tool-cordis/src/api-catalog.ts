@@ -2183,6 +2183,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the disposer removing the route.',
       },
       {
+        signature: 'registerAuth(check: WebAuthCheck): () => void',
+        description: 'Register the request auth gate. One owner only — a second registration throws, because two gates cannot compose. Absent a gate every request dispatches as today.',
+        parameters: [{ name: 'check', description: 'the gate deciding dispatch per request.' }],
+        returns: 'the disposer removing the gate.',
+      },
+      {
         signature: 'registerFallback(handler: WebRoute[\'handler\']): () => void',
         description: 'Claim the fallback seat: the handler answering every request no named route matches (the SPA dist server in the shipped Web composition). One owner only — a second registration throws, because two fallbacks cannot compose.',
         parameters: [{ name: 'handler', description: 'owns the full response lifecycle of unmatched requests.' }],
@@ -4715,6 +4721,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'UserQuestionProvider',
     declaration: 'export interface UserQuestionProvider {\n    ask(request: AskUserQuestionRequest): Promise<AskUserQuestionAnswer>;\n}',
+  },
+  {
+    name: 'WebAuthCheck',
+    declaration: 'export type WebAuthCheck = (req: IncomingMessage, res?: ServerResponse) => boolean | Promise<boolean>;',
   },
   {
     name: 'WebBootEntry',

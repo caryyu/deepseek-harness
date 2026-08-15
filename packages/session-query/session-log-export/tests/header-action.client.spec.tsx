@@ -69,4 +69,48 @@ describe('Session export Header action', () => {
     await download
     await waitFor(() => { expect(button.getAttribute('aria-busy')).toBe('false') })
   })
+
+  it('offers the capsule action through the overflow menu when the row is narrow', async () => {
+    const b = bench()
+    const more = b.view.getByRole('button', { name: en['more.aria'] })
+    fireEvent.click(more)
+    expect(b.view.getByRole('menuitem', { name: 'Session log' })).toBeTruthy()
+    expect(more.getAttribute('aria-expanded')).toBe('true')
+    // Escape closes the dropdown without acting (the Menu primitive's listener).
+    fireEvent.keyDown(document, { key: 'Escape' })
+    await waitFor(() => { expect(b.view.queryByRole('menuitem', { name: 'Session log' })).toBeNull() })
+    expect(more.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(more)
+    fireEvent.click(b.view.getByRole('menuitem', { name: 'Session log' }))
+    await waitFor(() => { expect(b.request).toHaveBeenCalledWith(SID) })
+    await waitFor(() => { expect(b.view.queryByRole('menuitem', { name: 'Session log' })).toBeNull() })
+  })
+
+  it('disables the overflow trigger and its row while this Session downloads', async () => {
+    const b = bench()
+    let release!: (response: Response) => void
+    const pending = new Promise<Response>((resolve) => { release = resolve })
+    const controller = new SessionLogDownloadController(() => pending, vi.fn())
+    const useSessionLogDownload = bindSessionExport(controller)
+    b.view.rerender(<SessionLogDownloadHeaderAction {...({
+      sessionId: SID,
+      useSessionLogDownload,
+      request: (sessionId: SessionId) => controller.download(sessionId),
+      dismiss: (sessionId: SessionId) => { controller.dismiss(sessionId) },
+      t: (key: keyof typeof en): string => en[key],
+    } as unknown as SessionLogDownloadDialogProps)} />)
+
+    const more = b.view.getByRole('button', { name: en['more.aria'] })
+    fireEvent.click(more)
+    const item = b.view.getByRole('menuitem', { name: 'Session log' })
+
+    const download = controller.download(SID)
+    await waitFor(() => { expect(more.getAttribute('aria-busy')).toBe('true') })
+    expect((more as HTMLButtonElement).disabled).toBe(true)
+    expect((item as HTMLButtonElement).disabled).toBe(true)
+    release(new Response('zip'))
+    await download
+    await waitFor(() => { expect(more.getAttribute('aria-busy')).toBe('false') })
+    expect((item as HTMLButtonElement).disabled).toBe(false)
+  })
 })
