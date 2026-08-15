@@ -11,11 +11,12 @@ import { connect } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { gunzipSync } from 'node:zlib'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
-import HttpServer from '../src/index.ts'
+import HttpServer, { gzipIfAccepted, type WebAuthCheck } from '../src/index.ts'
 
 let root: string | undefined
 let context: Context | undefined
@@ -68,13 +69,14 @@ async function request(port: number, path: string, init?: RequestInit): Promise<
 }
 
 /** Open one raw upgrade request and return after the handler writes its response. */
-async function upgrade(port: number, path: string): Promise<ReturnType<typeof connect>> {
+async function upgrade(port: number, path: string, headers: string[] = []): Promise<ReturnType<typeof connect>> {
   const socket = connect(port, '127.0.0.1')
   await once(socket, 'connect')
   const response = once(socket, 'data')
   socket.write([
     `GET ${path} HTTP/1.1`,
     `Host: 127.0.0.1:${String(port)}`,
+    ...headers,
     'Connection: Upgrade',
     'Upgrade: dsh-test',
     '',
@@ -83,6 +85,40 @@ async function upgrade(port: number, path: string): Promise<ReturnType<typeof co
   const [data] = await response as [Buffer]
   expect(String(data)).toContain('101 Switching Protocols')
   return socket
+}
+
+/** Raw HTTP GET returning the status line and response headers verbatim. */
+async function rawRequest(port: number, path: string, headers: string[] = []): Promise<string> {
+  const socket = connect(port, '127.0.0.1')
+  await once(socket, 'connect')
+  const response = once(socket, 'data')
+  socket.write([
+    `GET ${path} HTTP/1.1`,
+    `Host: 127.0.0.1:${String(port)}`,
+    ...headers,
+    '',
+    '',
+  ].join('\r\n'))
+  const [data] = await response as [Buffer]
+  socket.destroy()
+  return String(data)
+}
+
+/** Write one upgrade request and resolve once the server drops the socket. */
+async function rejectedUpgrade(port: number, path: string): Promise<void> {
+  const socket = connect(port, '127.0.0.1')
+  await once(socket, 'connect')
+  const closed = once(socket, 'close')
+  socket.write([
+    `GET ${path} HTTP/1.1`,
+    `Host: 127.0.0.1:${String(port)}`,
+    'Connection: Upgrade',
+    'Upgrade: dsh-test',
+    '',
+    '',
+  ].join('\r\n'))
+  await closed
+  socket.destroy()
 }
 
 describe('real Loader composition', () => {
@@ -200,6 +236,68 @@ describe('real Loader composition', () => {
     await expect(request(port, '/probe')).rejects.toThrow()
   })
 
+  it('enforces a registered auth gate on every HTTP and upgrade dispatch', { timeout: 60_000 }, async () => {
+    const loaded = await loadComposition()
+    const server = loaded.webServer
+    const port = server.port
+    server.register({ kind: 'exact', path: '/probe', handler: (_req, res) => { res.writeHead(200); res.end('EXACT') } })
+
+    // Without a gate every request dispatches as before.
+    expect(await request(port, '/probe')).toMatchObject({ status: 200, body: 'EXACT' })
+
+    // The seat admits exactly one owner.
+    let mode: 'pass' | 'reject' | 'throw' = 'pass'
+    const gate: WebAuthCheck = async (req) => {
+      if (mode === 'reject') return false
+      if (mode === 'throw') throw new Error('gate boom')
+      return req.headers.authorization === 'Basic c2VjcmV0' // "secret"
+    }
+    const releaseGate = server.registerAuth(gate)
+    expect(() => server.registerAuth(() => true)).toThrow(/auth gate already registered/)
+
+    // Rejected requests answer 401 with the Basic challenge before any route
+    // or fallback can answer, and no route body leaks out.
+    const challenged = await rawRequest(port, '/probe')
+    expect(challenged).toMatch(/^HTTP\/1\.1 401 /)
+    expect(challenged.toLowerCase()).toContain('www-authenticate: basic realm="dsh"')
+    expect((await request(port, '/probe')).body).toBe('')
+
+    // A request carrying the accepted credential dispatches to its route.
+    expect(await request(port, '/probe', { headers: { authorization: 'Basic c2VjcmV0' } }))
+      .toMatchObject({ status: 200, body: 'EXACT' })
+
+    // Upgrade dispatches pass the same gate: rejected sockets are dropped
+    // without a 101, accepted ones negotiate the protocol.
+    await rejectedUpgrade(port, '/events')
+    const registered = server.registerUpgrade({
+      path: '/events',
+      handler: (_req, socket) => {
+        socket.write('HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: dsh-test\r\n\r\n')
+      },
+    })
+    const upgraded = await upgrade(port, '/events?stream=mux', ['Authorization: Basic c2VjcmV0'])
+    upgraded.destroy()
+
+    // A gate failure answers 400 on HTTP (per-request containment) and drops
+    // upgrade sockets, then the server keeps serving.
+    mode = 'throw'
+    expect((await request(port, '/probe', { headers: { authorization: 'Basic c2VjcmV0' } })).status).toBe(400)
+    await rejectedUpgrade(port, '/events')
+    expect((await request(port, '/probe', { headers: { authorization: 'Basic c2VjcmV0' } })).status).toBe(400)
+
+    // The gate's async contract is exercised on both paths.
+    mode = 'pass'
+    expect((await request(port, '/probe')).status).toBe(401)
+
+    // The disposer restores gate-less dispatch and registrability.
+    releaseGate()
+    expect(await request(port, '/probe')).toMatchObject({ status: 200, body: 'EXACT' })
+    const releasedGate = server.registerAuth(() => true)
+    releasedGate()
+    expect(() => server.registerAuth(() => true)).not.toThrow()
+    registered()
+  })
+
   it('fails the fiber when the port is already taken (fail-loud at activation)', { timeout: 60_000 }, async () => {
     const first = await loadComposition()
     const takenPort = first.webServer.port
@@ -222,5 +320,49 @@ describe('real Loader composition', () => {
       if (root !== undefined) await rm(root, { recursive: true, force: true })
       root = firstRoot
     }
+  })
+})
+
+describe('gzipIfAccepted', () => {
+  const original = Buffer.from('window.__DSH_BOOT__ = {}'.repeat(40))
+
+  it('returns the body untouched without an Accept-Encoding header', async () => {
+    const result = await gzipIfAccepted(undefined, original)
+    expect(result.encoding).toBeUndefined()
+    expect(result.body).toBe(original)
+  })
+
+  it('gzips for an explicit gzip token', async () => {
+    const result = await gzipIfAccepted('gzip', original)
+    expect(result.encoding).toBe('gzip')
+    expect(gunzipSync(result.body)).toEqual(original)
+  })
+
+  it('matches case-insensitively and skips non-gzip tokens', async () => {
+    const result = await gzipIfAccepted('br, GZIP, deflate', original)
+    expect(result.encoding).toBe('gzip')
+    expect(gunzipSync(result.body)).toEqual(original)
+  })
+
+  it('honors q=0 as a rejection and other q values as acceptance', async () => {
+    expect((await gzipIfAccepted('gzip;q=0', original)).encoding).toBeUndefined()
+    expect((await gzipIfAccepted('gzip;q=0.5', original)).encoding).toBe('gzip')
+  })
+
+  it('accepts a bare * wildcard and rejects it with q=0', async () => {
+    expect((await gzipIfAccepted('*', original)).encoding).toBe('gzip')
+    expect((await gzipIfAccepted('*;q=0', original)).encoding).toBeUndefined()
+  })
+
+  it('lets an explicit gzip token override a wildcard in either order', async () => {
+    expect((await gzipIfAccepted('br, *', original)).encoding).toBe('gzip')
+    expect((await gzipIfAccepted('*, gzip;q=0', original)).encoding).toBeUndefined()
+    expect((await gzipIfAccepted('gzip;q=0, *;q=1', original)).encoding).toBeUndefined()
+  })
+
+  it('stays identity for identity-only, empty, or malformed preferences', async () => {
+    expect((await gzipIfAccepted('identity', original)).encoding).toBeUndefined()
+    expect((await gzipIfAccepted('', original)).encoding).toBeUndefined()
+    expect((await gzipIfAccepted('gzip;q=abc', original)).encoding).toBe('gzip')
   })
 })

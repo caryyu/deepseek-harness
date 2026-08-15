@@ -1,3 +1,7 @@
+.root {
+  display: inline-flex;
+}
+
 .sessionLogButton {
   display: inline-flex;
   align-items: center;
@@ -33,4 +37,43 @@
 
 .sessionLogButton span {
   white-space: nowrap;
+}
+
+/* Narrow title row: the 111px capsule cannot share the row with the crumb
+   cluster and the action chips, so the ellipsis trigger takes over and the
+   capsule action moves into its dropdown. The container is the header title
+   row (ConversationRoot .titleRow — anonymous query because CSS modules hash
+   container-names per module); the swap is pure CSS, so the two forms never
+   coexist for a given row width. */
+.moreButton {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 18px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+}
+
+.moreButton:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.moreButton:disabled {
+  color: var(--dsw-alias-label-dimmed);
+  cursor: wait;
+}
+
+@container (max-width: 480px) {
+  .sessionLogButton {
+    display: none;
+  }
+
+  .moreButton {
+    display: inline-flex;
+  }
 }

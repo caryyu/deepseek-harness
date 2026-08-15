@@ -27,6 +27,13 @@ export interface WebStartupValues {
   port?: number
   /** Explicit `--trusted-host` authorities, in argument order. */
   trustedHosts: string[]
+  /**
+   * The `user:pass` Basic credentials protecting the whole Web surface,
+   * absent when the invocation and the environment name none. The flag wins
+   * over the `DSH_BASIC_AUTH` environment variable; the environment form
+   * keeps the password out of process listings and shell history.
+   */
+  basicAuth?: string
 }
 
 /** The web flag family, as commander parsed it. */
@@ -34,6 +41,7 @@ interface WebOptions {
   host?: string
   port?: string
   trustedHost?: string[]
+  basicAuth?: string
 }
 
 /**
@@ -48,10 +56,12 @@ function webCommand(): Command {
     .option('--host <host>', 'bind host')
     .option('--port <port>', 'listen port; pass 0 to let the OS pick a free one')
     .option('--trusted-host <authority...>', 'extra authority the /api browser-trust fence accepts (host or host:port; repeatable)')
+    .option('--basic-auth <credentials>', 'require HTTP Basic credentials "user:pass" on every request (flag wins over the DSH_BASIC_AUTH environment variable; unset disables auth)')
     .addHelpText('after', `
 Examples:
   dsh --profile web                          serve on the composed host and port
   dsh --profile web --port 8080              serve on another port
+  DSH_BASIC_AUTH=user:pass dsh --profile web require a password without exposing it in argv
 `)
 }
 
@@ -72,10 +82,13 @@ export function apply(ctx: Context): void {
     if (options.port !== undefined && !/^\d+$/.test(options.port)) {
       program.error(`error: --port must be a number, got ${JSON.stringify(options.port)}`)
     }
+    const envBasicAuth = process.env.DSH_BASIC_AUTH
+    const basicAuth = options.basicAuth ?? (envBasicAuth === '' ? undefined : envBasicAuth)
     ctx.provide(WEB_STARTUP_SERVICE, {
       ...options.host !== undefined && { host: options.host },
       ...options.port !== undefined && { port: Number(options.port) },
       trustedHosts: options.trustedHost ?? [],
+      ...basicAuth !== undefined && { basicAuth },
     } satisfies WebStartupValues)
   })
   parseCmdline(ctx, program)

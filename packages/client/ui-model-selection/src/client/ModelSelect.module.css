@@ -52,6 +52,19 @@
   color: var(--dsw-alias-label-caption);
 }
 
+/* Narrow composer: the model name drops out and the effort level becomes the
+   chip's sole label — a name squeezed to a stub reads worse than none at all.
+   Only triggers that carry an effort span drop the name: a model without
+   reasoning keeps it as its sole identifier (same guard as the sibling
+   PermissionSelect collapse). The 460px cut is the row's squeeze point and
+   the container is the composer row (InputBar .row — anonymous query because
+   CSS modules hash container-names per module). */
+@container (max-width: 460px) {
+  .trigger:has(.triggerEffort) .triggerLabel {
+    display: none;
+  }
+}
+
 .chevron {
   flex: 0 0 auto;
   color: var(--dsw-alias-label-caption);

@@ -407,6 +407,15 @@ export interface ConnectionConfig {
    * that is not a bare, canonical authority fails the plugin load.
    */
   trustedHosts?: string[]
+  /**
+   * Optional `user:pass` credentials protecting every webserver dispatch
+   * (the `/api` route, WebSocket upgrades, plugins, and static dist) behind
+   * the webserver auth gate. The first valid Basic request mints a derived
+   * session cookie the browser carries on fetch and WebSocket alike; absent
+   * a value no gate registers and every request dispatches as today. A value
+   * that is not a `user:pass` pair fails the plugin load.
+   */
+  basicAuth?: string
   /** Maximum buffered JSON body for every `/api` request. */
   maxRequestBodyBytes?: number
 }

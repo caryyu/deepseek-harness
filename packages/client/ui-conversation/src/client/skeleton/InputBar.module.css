@@ -319,7 +319,11 @@
 }
 
 .trailing {
-  flex: none;
+  /* Shrinkable (tools-side chips already are): on a narrow row the model
+     seat and any right-side items give up width so the send button stays
+     inside the card. The model trigger truncates its name with ellipsis as
+     it loses width — the shrink is what lets that ellipsis engage. */
+  flex: 0 1 auto;
   gap: 12px;
 }
 

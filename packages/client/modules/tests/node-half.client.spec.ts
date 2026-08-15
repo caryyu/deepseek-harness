@@ -5,6 +5,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { gunzipSync } from 'node:zlib'
 import { Context } from '@deepseek-ai/cordis'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { WebServer, WebRoute } from '@deepseek-ai/dsh-host-webserver'
@@ -68,6 +69,34 @@ function construct(packageNames: string[]): ClientModuleRegistry {
   return constructWithRoute(packageNames).service
 }
 
+/** Dispatch one bundle-route request, capturing the raw response bytes. */
+async function dispatch(
+  route: WebRoute,
+  url: string,
+  acceptEncoding?: string,
+): Promise<{ status: number; headers: Record<string, string>; body: Buffer }> {
+  let status = 0
+  let headers: Record<string, string> | undefined
+  let body = Buffer.alloc(0)
+  const response = {
+    writeHead(nextStatus: number, nextHeaders?: Record<string, string>) {
+      status = nextStatus
+      headers = nextHeaders
+      return response
+    },
+    end(chunk?: Uint8Array) {
+      body = Buffer.from(chunk ?? [])
+      return response
+    },
+  } as unknown as ServerResponse
+  await route.handler({
+    method: 'GET',
+    url,
+    headers: { ...(acceptEncoding === undefined ? {} : { 'accept-encoding': acceptEncoding }) },
+  } as IncomingMessage, response)
+  return { status, headers: headers ?? {}, body }
+}
+
 describe('client bundle activation', () => {
   it('allows sibling dsh roles', () => {
     const currentName = '@fixture/current-client-field'
@@ -122,31 +151,50 @@ describe('client bundle activation', () => {
     const map = '{"version":3,"sources":["src/client/index.tsx"]}\n'
     writeFileSync(`${clientPath}.map`, map)
     const { route } = constructWithRoute([packageName])
-    let status = 0
-    let headers: Record<string, string> | undefined
-    let body = ''
-    const response = {
-      writeHead(nextStatus: number, nextHeaders?: Record<string, string>) {
-        status = nextStatus
-        headers = nextHeaders
-        return response
-      },
-      end(chunk?: Uint8Array) {
-        body = chunk === undefined ? '' : Buffer.from(chunk).toString('utf8')
-        return response
-      },
-    } as unknown as ServerResponse
 
-    await route.handler({
-      method: 'GET',
-      url: `/plugins/${packageName}/client.js.map`,
-    } as IncomingMessage, response)
-
-    expect(status).toBe(200)
-    expect(headers).toEqual({
+    const plain = await dispatch(route, `/plugins/${packageName}/client.js.map`)
+    expect(plain.status).toBe(200)
+    // The map URL carries no rev, so it revalidates instead of pinning.
+    expect(plain.headers).toEqual({
       'content-type': 'application/json; charset=utf-8',
       'cache-control': 'no-cache',
+      'vary': 'accept-encoding',
+      'content-length': String(Buffer.byteLength(map)),
     })
-    expect(body).toBe(map)
+    expect(plain.body.toString('utf8')).toBe(map)
+
+    const gzipped = await dispatch(route, `/plugins/${packageName}/client.js.map`, 'gzip')
+    expect(gzipped.headers['content-encoding']).toBe('gzip')
+    expect(gunzipSync(gzipped.body).toString('utf8')).toBe(map)
+  })
+
+  it('serves bundles as immutable content-addressed responses with negotiated gzip', async () => {
+    const packageName = '@fixture/bundle-cache'
+    const clientPath = writePackage(packageName)
+    mkdirSync(dirname(clientPath), { recursive: true })
+    const content = 'module.exports = {}\n'.repeat(300)
+    writeFileSync(clientPath, content)
+    const { route } = constructWithRoute([packageName])
+    const url = `/plugins/${packageName}/client.js?rev=abc123`
+
+    const plain = await dispatch(route, url)
+    expect(plain.status).toBe(200)
+    // The rev query content-addresses the body, so the browser may pin it.
+    expect(plain.headers).toEqual({
+      'content-type': 'text/javascript; charset=utf-8',
+      'cache-control': 'public, max-age=31536000, immutable',
+      'vary': 'accept-encoding',
+      'content-length': String(Buffer.byteLength(content)),
+    })
+    expect(plain.body.toString('utf8')).toBe(content)
+
+    const gzipped = await dispatch(route, url, 'gzip')
+    expect(gzipped.headers).toMatchObject({
+      'content-encoding': 'gzip',
+      'cache-control': 'public, max-age=31536000, immutable',
+      'vary': 'accept-encoding',
+    })
+    expect(Number(gzipped.headers['content-length'])).toBe(gzipped.body.length)
+    expect(gunzipSync(gzipped.body).toString('utf8')).toBe(content)
   })
 })

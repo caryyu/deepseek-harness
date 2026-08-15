@@ -9,10 +9,44 @@ import { HOST_EVENTS_PATH, MUX_EVENTS_PATH } from '../api-path.ts'
 type SocketItem<F> = { kind: 'frame'; envelope: RpcRequest<F> } | { kind: 'end' }
 type Parser<F> = { parse(value: unknown): F }
 
+/** sessionStorage marker keeping one reauthentication navigation per rejected session. */
+const REAUTH_MARKER = 'dsh-web-reauth'
+
+/**
+ * Recover from a 401 by navigating the tab: a top-level navigation replays
+ * the HTTP Basic challenge natively, the browser caches the credentials, and
+ * the page reloads authenticated. The marker prevents a reload loop while the
+ * session stays rejected; a successful response clears it. Storage or
+ * location unavailable (opaque origins) is not an error — the carrier just
+ * surfaces the 401.
+ */
+function triggerReauth(): void {
+  try {
+    if (sessionStorage.getItem(REAUTH_MARKER) === '1') return
+    sessionStorage.setItem(REAUTH_MARKER, '1')
+  } catch {
+    return
+  }
+  location.assign(`${location.pathname}${location.search}?reauth=1`)
+}
+
+/** Clear the reauth marker after any non-401 response proves the session lives. */
+function clearReauthMarker(): void {
+  try {
+    sessionStorage.removeItem(REAUTH_MARKER)
+  } catch {
+    // Storage unavailable: nothing to clear.
+  }
+}
+
 /** Browser platform subclass: unary/respond use fetch; mux/host use downlink-only WebSockets. */
 export class WebApiClient extends AbstractApiClient {
   protected doFetch(input: URL, init?: RequestInit): Promise<Response> {
-    return globalThis.fetch(input, init)
+    return globalThis.fetch(input, init).then((response) => {
+      if (response.status === 401) triggerReauth()
+      else clearReauthMarker()
+      return response
+    })
   }
 
   protected override openMux(

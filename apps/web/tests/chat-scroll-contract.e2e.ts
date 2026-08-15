@@ -657,9 +657,11 @@ describe('web e2e: long Chat scroll contract', () => {
       await world.page.getByRole('tab', { name: 'Trajectory', exact: true }).click()
       await world.page.getByLabel('Trajectory timeline').waitFor({ timeout: 30_000 })
       await world.page.setViewportSize({ width: 700, height: 900 })
-      // The narrow breakpoint auto-collapses the sidebar. Re-open it because
-      // this scenario switches sessions while pinning the narrow Chat scroll owner.
-      await world.page.getByRole('button', { name: 'Open sidebar', exact: true }).click()
+      // The narrow breakpoint hides the sidebar; the rail toggle stays in the
+      // DOM (clipped, out of the a11y tree), so re-open through the floating
+      // drawer toggle. This scenario switches sessions while pinning the
+      // narrow Chat scroll owner.
+      await world.page.locator('[class*="sidebarToggle"]').click()
       await world.page.getByRole('tab', { name: 'Chat', exact: true }).click()
       await nextPaint(world.page)
       await expectSameFlowTop(world.page, sessionAnchor)

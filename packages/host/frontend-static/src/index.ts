@@ -13,10 +13,10 @@
 
 import type { ServerResponse } from 'node:http'
 import { readFile } from 'node:fs/promises'
-import { dirname, extname, join, normalize, resolve, sep } from 'node:path'
+import { basename, dirname, extname, join, normalize, resolve, sep } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import type {} from '@deepseek-ai/dsh-host-webserver'
+import { gzipIfAccepted } from '@deepseek-ai/dsh-host-webserver'
 
 /** Stable Cordis plugin name. */
 export const name = 'frontend-static'
@@ -45,6 +45,31 @@ const MIME: Record<string, string> = {
 }
 
 /**
+ * Dist files whose bodies are text and therefore gzip-compressible (fonts and
+ * unknown extensions ship raw).
+ */
+const COMPRESSIBLE: ReadonlySet<string> = new Set([
+  '.html', '.js', '.css', '.svg', '.json', '.map', '.webmanifest',
+])
+
+/**
+ * Content-hashed asset name: vite emits `name-<hash>.<ext>` (build assets) and
+ * copies `public/` verbatim (manifest, favicon), so a dash-hash name plus a
+ * known extension identifies a body that a rebuild renames. Only those may be
+ * pinned; everything else revalidates every fetch.
+ */
+const HASHED_ASSET_NAME = /-[A-Za-z0-9_-]{8,}\.(?:js|css|json|map|svg|woff2?|ttf)(?:\.map)?$/
+
+/** Index responses carry the boot manifest; they must always revalidate. */
+const INDEX_CACHE = 'no-cache'
+
+/** Responses for `HASHED_ASSET_NAME` bodies: content-addressed by filename, safe to pin. */
+const IMMUTABLE_CACHE = 'public, max-age=31536000, immutable'
+
+/** Every response that may switch on `Accept-Encoding` declares it for shared caches. */
+const VARY = 'accept-encoding'
+
+/**
  * Serve one GET/HEAD static request from the dist root.
  * @param pathname - decoded URL pathname of the request.
  * @param res - the node:http response to write.
@@ -52,10 +77,12 @@ const MIME: Record<string, string> = {
  * @param distIndex - absolute path of index.html inside distRoot.
  * @param renderIndex - produces the index.html body (index-tap injection) for
  * `/` and every SPA fallback.
+ * @param acceptEncoding - the request's `Accept-Encoding` header value; text
+ * bodies are gzip-compressed when it permits gzip.
  */
 export async function serveStatic(
   pathname: string, res: ServerResponse, distRoot: string, distIndex: string,
-  renderIndex: () => Promise<string>,
+  renderIndex: () => Promise<string>, acceptEncoding: string | undefined,
 ): Promise<void> {
   const target = resolve(normalize(join(distRoot, pathname)))
   // Traversal rejection: the target must be distRoot itself (`/`) or stay under
@@ -67,22 +94,39 @@ export async function serveStatic(
     return
   }
   const serveIndex = async (): Promise<void> => {
-    const body = await renderIndex()
-    res.writeHead(200, { 'content-type': MIME['.html'] })
+    const { body, encoding } = await gzipIfAccepted(acceptEncoding, Buffer.from(await renderIndex()))
+    res.writeHead(200, {
+      'content-type': MIME['.html'],
+      'cache-control': INDEX_CACHE,
+      'vary': VARY,
+      ...(encoding === undefined ? {} : { 'content-encoding': encoding }),
+      'content-length': String(body.length),
+    })
     res.end(body)
   }
   if (target === distRoot || target === distIndex) {
     await serveIndex()
     return
   }
+  const ext = extname(target)
+  const cacheControl = HASHED_ASSET_NAME.test(basename(target)) ? IMMUTABLE_CACHE : INDEX_CACHE
+  let raw: Buffer
   try {
-    const body = await readFile(target)
-    res.writeHead(200, { 'content-type': MIME[extname(target)] ?? 'application/octet-stream' })
-    res.end(body)
+    raw = await readFile(target)
   } catch {
     // Miss (ENOENT/EISDIR) falls back to index.html with 200 (SPA routing).
     await serveIndex()
+    return
   }
+  const { body, encoding } = await gzipIfAccepted(COMPRESSIBLE.has(ext) ? acceptEncoding : undefined, raw)
+  res.writeHead(200, {
+    'content-type': MIME[ext] ?? 'application/octet-stream',
+    'cache-control': cacheControl,
+    'vary': VARY,
+    ...(encoding === undefined ? {} : { 'content-encoding': encoding }),
+    'content-length': String(body.length),
+  })
+  res.end(body)
 }
 
 /**
@@ -105,6 +149,6 @@ export function apply(ctx: Context, config: Config): void {
     }
     /* v8 ignore next -- node:http always sets url on server requests */
     const rawPath = new URL(req.url ?? '/', 'http://x').pathname
-    await serveStatic(decodeURIComponent(rawPath), res, distRoot, distIndex, renderIndex)
+    await serveStatic(decodeURIComponent(rawPath), res, distRoot, distIndex, renderIndex, req.headers['accept-encoding'])
   }), 'frontend-static: fallback seat')
 }

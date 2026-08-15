@@ -6,13 +6,20 @@
  * renders HERE with live parameters from the concession solve, and the
  * session-aware occupants render in fixed column positions; strict entries
  * gate themselves on current-session availability while session-maybe
- * entries retain identity. Pure component: everything arrives
- * through the three framework shares — zero cordis or framework imports,
- * zero self-made hooks.
+ * entries retain identity. Below the auto-collapse breakpoint the sidebar
+ * hides entirely instead of keeping its control rail, and a floating toggle
+ * at the boundary's mid-height shows and hides it (the drawer pattern);
+ * drag resizing is a desktop affordance and does not render narrow. Pure
+ * component: everything arrives through the framework shares — zero cordis
+ * or framework imports, zero self-made hooks.
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { PropsRenderSlots, PropsRuntime, PropsStore } from '@deepseek-ai/dsh-client-ui-slots'
+import clsx from 'clsx'
+import type { PropsLocale, PropsRenderSlots, PropsRuntime, PropsStore } from '@deepseek-ai/dsh-client-ui-slots'
+import {
+  IconChevronLeftOutline14, IconChevronRightOutline14,
+} from '@deepseek-ai/dsh-client-ui-primitives'
 import { computeColumns, SIDEBAR_AUTO_COLLAPSE, SIDEBAR_DEFAULT } from './columns.ts'
 import type { createLayoutStore } from './stores.ts'
 import css from './AppFrame.module.css'
@@ -22,6 +29,7 @@ export type AppFrameProps =
   & PropsRuntime<'root'>
   & PropsRenderSlots<'sidebar' | 'conversation' | 'details' | 'shell.overlay'>
   & PropsStore<ReturnType<typeof createLayoutStore>>
+  & PropsLocale<'layout'>
 
 /** Center column grid item (session-body building block). */
 function CenterColumn(props: { children?: ReactNode }) {
@@ -83,12 +91,42 @@ function DragHandle(props: { side: 'sidebar' | 'details'; left: number; onStart:
   )
 }
 
+/**
+ * Narrow-viewport sidebar show/hide toggle: a floating arrow at the boundary's
+ * mid-height. Hidden, it sits flush at the frame's left edge as a nub; shown,
+ * it straddles the column border. The chevron points at the action — right to
+ * show, left to hide.
+ * @param props - the sidebar's rendered state and the store toggle.
+ * @returns the floating toggle button.
+ */
+function SidebarToggle(props: {
+  collapsed: boolean
+  left: number
+  onToggle: () => void
+  t: PropsLocale<'layout'>['t']
+}) {
+  const { collapsed, left, onToggle, t } = props
+  return (
+    <button
+      type="button"
+      className={clsx(css.sidebarToggle, collapsed && css.sidebarToggleNub)}
+      style={{ left }}
+      aria-label={collapsed ? t('toggle.open') : t('toggle.collapse')}
+      aria-expanded={!collapsed}
+      onClick={onToggle}
+    >
+      {collapsed ? <IconChevronRightOutline14 /> : <IconChevronLeftOutline14 />}
+    </button>
+  )
+}
+
 /** The three-column frame (see module doc). */
 export function AppFrame({
   useStore,
   useSessions,
   actions,
   renderSlot,
+  t,
 }: AppFrameProps) {
   const panels = useStore(s => s)
   const detailsSession = useSessions((s) => {
@@ -127,9 +165,9 @@ export function AppFrame({
     }
   }, [])
 
-  // Narrow viewports auto-collapse the sidebar; the store mirror keeps
+  // Narrow viewports auto-hide the sidebar; the store mirror keeps
   // toggleSidebar's semantics right (narrow toggles flip the manual
-  // re-expand override, stores.ts). Collapsed is decided here, so the
+  // re-expand override, stores.ts). Hidden is decided here, so the
   // solver stays breakpoint-free: a narrow re-expand passes the preference
   // (or the default when the wide preference is closed) and the center
   // absorbs the squeeze.
@@ -139,7 +177,15 @@ export function AppFrame({
   const sidebarPreference = sidebarCollapsed
     ? 0
     : panels.sidebar === 0 ? SIDEBAR_DEFAULT : panels.sidebar
-  const cols = computeColumns(viewport, sidebarPreference, detailsSession === undefined ? 0 : panels.details)
+  // Narrow hidden renders a zero-width track (no rail); wide closed keeps the
+  // compact control rail.
+  const narrowHidden = narrow && sidebarCollapsed
+  const cols = computeColumns(
+    viewport,
+    sidebarPreference,
+    detailsSession === undefined ? 0 : panels.details,
+    narrowHidden ? 0 : undefined,
+  )
   const colsRef = useRef(cols)
   colsRef.current = cols
 
@@ -170,12 +216,14 @@ export function AppFrame({
       data-details-collapsed={cols.details === 0 || undefined}
       data-dragging={dragging || undefined}
     >
-      <div className={css.sidebarCol}>
+      <div className={clsx(css.sidebarCol, narrowHidden && css.sidebarColHidden)}>
         {/* Render-site slot call with live concession output: a closed
             sidebar keeps the mounted slot at the compact-rail width, and the
             component sees its rendered state as owner params decided here
-            (collapsed follows the resolved rail, so a derived auto-collapse
-            renders the rail UI too). */}
+            (collapsed follows the resolved track, so a derived auto-collapse
+            renders the rail UI too; while narrow-hidden the column carries
+            zero width and the shell's controls are out of the a11y tree via
+            .sidebarColHidden). */}
         {renderSlot('sidebar', {
           collapsed: sidebarCollapsed,
           width: cols.sidebar,
@@ -193,8 +241,12 @@ export function AppFrame({
       <div className={css.overlayLayer} data-shell-overlay>
         {renderSlot('shell.overlay', {})}
       </div>
-      {/* The collapsed rail is fixed-width: no resize handle while closed. */}
-      {!sidebarCollapsed && <DragHandle side="sidebar" left={cols.sidebar} onStart={onSidebarStart} onDrag={onSidebarDrag} onEnd={onDragEnd} />}
+      {/* Narrow: the floating toggle is the sidebar's only boundary control
+          (drawer show/hide); drag resizing is desktop-only. Wide closed keeps
+          the fixed rail: no resize handle while closed. */}
+      {narrow
+        ? <SidebarToggle collapsed={sidebarCollapsed} left={cols.sidebar} onToggle={() => { actions.toggleSidebar() }} t={t} />
+        : !sidebarCollapsed && <DragHandle side="sidebar" left={cols.sidebar} onStart={onSidebarStart} onDrag={onSidebarDrag} onEnd={onDragEnd} />}
       {cols.details > 0 && <DragHandle side="details" left={viewport - cols.details} onStart={onDetailsStart} onDrag={onDetailsDrag} onEnd={onDragEnd} />}
     </div>
   )
