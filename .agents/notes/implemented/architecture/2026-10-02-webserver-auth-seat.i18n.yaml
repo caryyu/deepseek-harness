@@ -1,0 +1,19 @@
+# Bilingual-pair consistency record for 2026-10-02-webserver-auth-seat.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-10-02-webserver-auth-seat.md
+/agent-note-web-surface-auth-seat:
+  en: 9682ee1f4e4ddc10
+  zh: 2f1dc735a68c39ed
+/agent-note-web-surface-auth-seat/problem:
+  en: 07417b1b2fd06680
+  zh: 4bb91baa27013022
+/agent-note-web-surface-auth-seat/decision:
+  en: 11a5864144dd7642
+  zh: f3e4a8692ae4d657
+/agent-note-web-surface-auth-seat/alternatives-considered:
+  en: a61eb57e1b3e5175
+  zh: f7dff41e2e6e02ac
+/agent-note-web-surface-auth-seat/consequences:
+  en: d601a5e998d5b6f1
+  zh: 5a9cfb3c58376ac5

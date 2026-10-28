@@ -19,6 +19,7 @@ import { createLayoutStore } from './stores.ts'
 import { LayoutController } from './service.ts'
 import type { ShortcutCommandId } from '@deepseek-ai/dsh-client-shortcuts/client'
 import { en, zh } from './shortcut-locales.ts'
+import { en as layoutEn, NS as LAYOUT_NS, zh as layoutZh } from './locales.ts'
 import { ThemePresenter } from './theme-presenter.ts'
 
 // Contract exports only (export-convergence rule: cross-package consumers
@@ -43,6 +44,8 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
     /** Layout keyboard command labels. */
     'shortcuts.layout': keyof typeof zh
+    /** Frame chrome copy for the narrow-viewport sidebar toggle. */
+    layout: import('./locales.ts').LayoutKey
   }
 
   interface GlobalStandardProps {
@@ -150,6 +153,7 @@ export const inject = ['slots', 'theme', 'locale', 'shortcuts']
  */
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register('shortcuts.layout', { zh, en }), 'layout: command labels')
+  ctx.effect(() => ctx.locale.register(LAYOUT_NS, { zh: layoutZh, en: layoutEn }), 'layout: frame chrome copy')
   const t = ctx.locale.bind('shortcuts.layout')
 
   ctx.effect(() => {
@@ -170,7 +174,7 @@ export function apply(ctx: ClientContext): void {
     const disposeService = ctx.reflect.provide('layout', layout)
     const disposeRegistration = ctx.slots.register({
       name: 'root',
-      locale: 'common',
+      locale: LAYOUT_NS,
       children: {
         'sidebar': { kind: 'single', scope: 'root' },
         'main': { kind: 'keyed', scope: 'root' },

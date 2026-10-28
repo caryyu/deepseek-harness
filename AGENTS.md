@@ -12,6 +12,10 @@ Record each externally perceptible breaking change immediately in an [upgrade gu
 
 **Application launch.** Only `dsh` profiles launch supported Node apps; package bins, demos, and public SDK argv escapes are forbidden ([rule](docs/architecture.md#application-launch)).
 
+## Fork-local patches
+
+This checkout is upstream `0.2.0-rc.2` plus fork-local surfaces: a webserver auth-gate seat, a narrow-viewport sidebar drawer, a shrinkable composer row with a collapsing model chip, and an export capsule that folds into an overflow menu. The Basic gate itself is a plugin outside the repository, mounted by the `web` profile. The registry, deployment wiring, verification checklist, and upgrade protocol live in [FORK.md](FORK.md).
+
 ## Repository layout
 
 ```

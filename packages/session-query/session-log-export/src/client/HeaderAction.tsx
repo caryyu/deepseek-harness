@@ -22,7 +22,11 @@ export interface SessionLogDownloadHeaderInjected extends SessionLogDownloadDial
 export type SessionLogDownloadHeaderProps = SessionLogDownloadDialogProps & InjectFace<SessionLogDownloadHeaderInjected>
 
 /**
- * Render the Session Header menu with download and optional feedback actions.
+ * Render the Session Header export control and its shared result dialog. On
+ * title rows too narrow for the labelled capsule, a compact overflow trigger
+ * takes over and the capsule action becomes the dropdown's first row; the
+ * swap is a container query against the header title row (see
+ * HeaderAction.module.css), so the two forms never render together.
  * @param props - Session runtime, download controller, and localized copy.
  * @returns the persistent Header action and Session-scoped dialog.
  */
@@ -35,34 +39,46 @@ export function SessionLogDownloadHeaderAction(props: SessionLogDownloadHeaderPr
 
   return (
     <>
-      <Menu
-        open={open}
-        align="end"
-        dense
-        onClose={() => { setOpen(false) }}
-        items={[
-          { id: 'download', label: t('menu.download'), icon: <IconDownloadOutlineRegular />, disabled: busy },
-          ...feedbackAvailable ? [{ id: 'feedback', label: t('menu.feedback'), icon: <IconPaperPlaneOutlineRegular /> }] : [],
-        ]}
-        onSelect={(id) => {
-          setOpen(false)
-          if (id === 'feedback') openFeedback(sessionId)
-          else void request(sessionId)
-        }}
-        anchor={(
-          <Button
-            size="sm"
-            className={css.moreButton}
-            aria-label={t('header.more')}
-            aria-haspopup="menu"
-            aria-expanded={open}
-            aria-busy={busy}
-            onClick={() => { setOpen(value => !value) }}
-          >
-            <IconEllipsisOutlineRegular />
-          </Button>
-        )}
-      />
+      <span className={css.root}>
+        <Button
+          size="sm"
+          className={css.sessionLogButton}
+          disabled={busy}
+          aria-busy={busy}
+          onClick={() => { void request(sessionId) }}
+        >
+          <IconDownloadOutlineRegular />
+          {t('action.sessionLog')}
+        </Button>
+        <Menu
+          open={open}
+          align="end"
+          dense
+          onClose={() => { setOpen(false) }}
+          items={[
+            { id: 'download', label: t('menu.download'), icon: <IconDownloadOutlineRegular />, disabled: busy },
+            ...feedbackAvailable ? [{ id: 'feedback', label: t('menu.feedback'), icon: <IconPaperPlaneOutlineRegular /> }] : [],
+          ]}
+          onSelect={(id) => {
+            setOpen(false)
+            if (id === 'feedback') openFeedback(sessionId)
+            else void request(sessionId)
+          }}
+          anchor={(
+            <Button
+              size="sm"
+              className={css.moreButton}
+              aria-label={t('header.more')}
+              aria-haspopup="menu"
+              aria-expanded={open}
+              aria-busy={busy}
+              onClick={() => { setOpen(value => !value) }}
+            >
+              <IconEllipsisOutlineRegular />
+            </Button>
+          )}
+        />
+      </span>
       <SessionLogDownloadDialog {...props} />
     </>
   )

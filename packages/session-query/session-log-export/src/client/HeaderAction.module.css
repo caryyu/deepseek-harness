@@ -1,5 +1,22 @@
 /* The shared compact Button owns radius, height, and interaction fills. */
+.root {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* Wide title rows: the labelled capsule is the only visible form. The gap
+   separates the icon from its label inside the compact button. */
+.sessionLogButton {
+  gap: 6px;
+}
+
+/* Narrow title row: the labelled capsule cannot share the row with the crumb
+   cluster and the action chips, so the ellipsis trigger takes over and the
+   capsule action moves into its dropdown. The container is the header title
+   row (ConversationRoot .titleRow — anonymous query because CSS modules hash
+   container names per module), so the two forms never coexist for one width. */
 .moreButton {
+  display: none;
   flex: none;
   width: 28px;
   padding: 0;
@@ -9,4 +26,16 @@
 .moreButton svg {
   width: 15px;
   height: 15px;
+}
+
+@container (max-width: 480px) {
+  .sessionLogButton {
+    display: none;
+  }
+
+  .moreButton {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
 }

@@ -9,8 +9,8 @@
   en: 9c6c5fcadd836722
   zh: f5b79ea2c4be6dde
 /deepseek-ai-dsh-host-webserver/summary:
-  en: 2b56ae0c86dae540
-  zh: 9dd7e304074703d4
+  en: ce84d8c5f514d0f9
+  zh: 6f28ec5d125c32e5
 /deepseek-ai-dsh-host-webserver/table-of-contents:
   en: d152484eb41ac6b4
   zh: 09388d293f9be9cb
@@ -23,6 +23,9 @@
 /deepseek-ai-dsh-host-webserver/use-this-package/registering-routes:
   en: 296ffba200f0dc93
   zh: 5d78d6b5f48634c9
+/deepseek-ai-dsh-host-webserver/use-this-package/the-auth-seat:
+  en: 7ab0d7f2c01fb831
+  zh: b69d012010fba9b4
 /deepseek-ai-dsh-host-webserver/use-this-package/the-fallback-seat:
   en: e21232b7aecbe7a8
   zh: 2c4a94cab2aa53ff

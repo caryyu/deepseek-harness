@@ -96,6 +96,40 @@ async function upgrade(port: number, path: string): Promise<ReturnType<typeof co
   return socket
 }
 
+/**
+ * Send one raw upgrade request and report whether the server answered or
+ * dropped the socket; an auth-gated upgrade never reaches a response.
+ * @param port - listening port of the composed webserver.
+ * @param path - upgrade pathname to request.
+ * @param headers - extra request headers (the derived auth cookie).
+ * @returns 'answered' when the server wrote bytes, 'dropped' when it closed.
+ */
+async function probeUpgrade(
+  port: number,
+  path: string,
+  headers: Record<string, string> = {},
+): Promise<'answered' | 'dropped'> {
+  const socket = connect(port, '127.0.0.1')
+  socket.on('error', () => { /* A server-side reset is the fixture outcome. */ })
+  await once(socket, 'connect')
+  const outcome = Promise.race([
+    once(socket, 'data').then(() => 'answered' as const),
+    once(socket, 'close').then(() => 'dropped' as const),
+  ])
+  socket.write([
+    `GET ${path} HTTP/1.1`,
+    `Host: 127.0.0.1:${String(port)}`,
+    'Connection: Upgrade',
+    'Upgrade: dsh-test',
+    ...Object.entries(headers).map(([name, value]) => `${name}: ${value}`),
+    '',
+    '',
+  ].join('\r\n'))
+  const result = await outcome
+  socket.destroy()
+  return result
+}
+
 describe('real Loader composition', () => {
   it('applies gzip only to eligible socket-backed HTTP responses', { timeout: 60_000 }, async () => {
     expect(HttpServer.Config({ host: '127.0.0.1', port: 0 })).toEqual({
@@ -373,5 +407,63 @@ describe('real Loader composition', () => {
       if (root !== undefined) await rm(root, { recursive: true, force: true })
       root = firstRoot
     }
+  })
+
+  it('gates every HTTP and upgrade dispatch through the single auth seat', { timeout: 60_000 }, async () => {
+    const loaded = await loadComposition()
+    const server = loaded.webServer
+    const port = server.port
+    server.register({ kind: 'exact', path: '/open', handler: (_req, res) => { res.writeHead(200); res.end('OPEN') } })
+    const releaseFallback = server.registerFallback((_req, res) => { res.writeHead(200); res.end('FALLBACK') })
+
+    let allow = false
+    const surfaces: string[] = []
+    const disposeAuth = server.registerAuth((req, res) => {
+      surfaces.push(res === undefined ? 'upgrade' : 'http')
+      return allow && req.headers.cookie === 'dsh-auth=ok'
+    }, 'Basic realm="dsh"')
+    expect(() => server.registerAuth(() => true, 'Basic realm="other"'))
+      .toThrow(/auth gate already registered/)
+    expect(() => server.registerAuth(() => true, '  '))
+      .toThrow(/non-empty/)
+
+    // Denied: 401 with the registered challenge, empty body, before the route
+    // or the fallback runs.
+    const denied = await request(port, '/open')
+    expect(denied).toMatchObject({ status: 401, body: '' })
+    expect(denied.headers.get('www-authenticate')).toBe('Basic realm="dsh"')
+    expect((await request(port, '/unclaimed')).status).toBe(401)
+    expect(surfaces.at(-1)).toBe('http')
+
+    // Allowed: the route and the fallback answer normally once the gate admits.
+    allow = true
+    expect(await request(port, '/open', { headers: { cookie: 'dsh-auth=ok' } }))
+      .toMatchObject({ status: 200, body: 'OPEN' })
+    expect((await request(port, '/unclaimed', { headers: { cookie: 'dsh-auth=ok' } })).body)
+      .toBe('FALLBACK')
+    expect((await request(port, '/open', { headers: { cookie: 'dsh-auth=stale' } })).status).toBe(401)
+
+    // Upgrades carry no response: the gate sees `undefined`, and a rejected or
+    // throwing gate drops the socket instead of answering.
+    server.registerUpgrade({
+      path: '/stream',
+      handler: (_req, socket) => {
+        socket.write('HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: dsh-test\r\n\r\n')
+      },
+    })
+    expect(await probeUpgrade(port, '/stream')).toBe('dropped')
+    expect(surfaces.at(-1)).toBe('upgrade')
+    expect(await probeUpgrade(port, '/stream', { cookie: 'dsh-auth=ok' })).toBe('answered')
+
+    disposeAuth()
+    expect((await request(port, '/open')).status).toBe(200)
+
+    // A throwing gate denies and logs rather than admitting or crashing.
+    const disposeThrowing = server.registerAuth(() => { throw new Error('gate failure') }, 'Basic realm="dsh"')
+    expect((await request(port, '/open')).status).toBe(401)
+    expect(await probeUpgrade(port, '/stream')).toBe('dropped')
+    disposeThrowing()
+    releaseFallback()
+    expect((await request(port, '/open')).status).toBe(200)
   })
 })

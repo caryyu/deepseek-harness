@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-Browsers reach the web GUI over HTTP through `dsh-host-webserver`: a `node:http` server where other plugins register named routes, upgrade routes, index startup inputs, and one fallback handler. It knows no harness concepts and serves no files — the `/api` bridge, plugin bundles, the HMR event stream, and the SPA dist belong to the plugins that register them. Route matching is fixed: exact over the whole table, then longest prefix, then the fallback handler. It serves browsers only; Electron loads dist over `file://` and carries fetch over an IPC bridge.
+Browsers reach the web GUI over HTTP through `dsh-host-webserver`: a `node:http` server where other plugins register named routes, upgrade routes, an optional request auth gate, index startup inputs, and one fallback handler. It knows no harness concepts and serves no files — the `/api` bridge, plugin bundles, the HMR event stream, and the SPA dist belong to the plugins that register them. Route matching is fixed: exact over the whole table, then longest prefix, then the fallback handler. It serves browsers only; Electron loads dist over `file://` and carries fetch over an IPC bridge.
 
 ## Table of Contents
 
@@ -43,6 +43,10 @@ Set `compression: 'gzip'` to wrap eligible socket-backed responses without chang
 ### Registering routes
 
 `register(route)` adds a named `exact` or `prefix` HTTP route, `registerUpgrade(route)` adds an upgrade route for an exact pathname, and both return a disposer that removes the registration. A duplicate path within either table throws — route patterns are a composition-level contract, so a collision is a misconfiguration. HTTP matching is exact over the whole table, then longest prefix, then the fallback handler; upgrades match exactly and unmatched connections are closed.
+
+### The auth seat
+
+`registerAuth(check, challenge)` claims the one request gate. The check runs before HTTP route matching — named routes, the fallback, and 404 answers alike — and before every upgrade dispatch, so a composition that needs a credential in front of the whole surface registers it here instead of wrapping individual routes. The gate owns credential semantics; the server owns the rejection protocol: a rejected HTTP request answers 401 with the registered `WWW-Authenticate` challenge, a rejected upgrade closes its socket, and a gate that throws denies the request and logs the failure. The HTTP call receives the response, letting a gate mint artifacts such as cookies before admitting; the upgrade call receives none, so only a request already carrying a cookie can pass an upgrade. A second registration throws while the first is live, and the disposer releases the seat.
 
 ### The fallback seat
 

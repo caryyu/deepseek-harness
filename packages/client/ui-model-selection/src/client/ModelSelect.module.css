@@ -62,6 +62,18 @@
   color: var(--dsw-alias-label-caption);
 }
 
+/* Narrow composer: the model name drops out and the effort level becomes the
+   chip's sole label — a name squeezed to a stub reads worse than none at all.
+   Only triggers that carry an effort span drop the name: a model without
+   reasoning keeps it as its sole identifier. The 460px cut is the row's
+   squeeze point; the query container is the composer row (InputBar's anonymous
+   inline-size container, so an unnamed query reaches it). */
+@container (max-width: 460px) {
+  .trigger:has(.triggerEffort) .triggerLabel {
+    display: none;
+  }
+}
+
 /* The Models glyph replaces the text when the composer row cannot fit it. */
 .triggerIcon {
   display: var(--dsh-composer-model-icon-display, none);

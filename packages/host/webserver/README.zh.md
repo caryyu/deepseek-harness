@@ -9,7 +9,7 @@ kind: "package-reference"
 
 ## 概述
 
-浏览器经由 `dsh-host-webserver` 通过 HTTP 访问 web GUI：一个 `node:http` 服务器，其他插件在其中注册具名路由、upgrade 路由、index 启动输入与一个回退 handler。它不了解任何 harness 概念，也不提供任何文件服务——`/api` 桥接、插件 bundle、HMR（热模块替换）事件流与 SPA dist 都属于注册它们的插件。路由匹配顺序固定不变：先在整张表中匹配精确 route，再匹配最长前缀，最后交给回退 handler。它只服务浏览器；Electron 通过 `file://` 加载 dist，并经 IPC 桥接承载 fetch。
+浏览器经由 `dsh-host-webserver` 通过 HTTP 访问 web GUI：一个 `node:http` 服务器，其他插件在其中注册具名路由、upgrade 路由、可选的请求认证门禁、index 启动输入与一个回退 handler。它不了解任何 harness 概念，也不提供任何文件服务——`/api` 桥接、插件 bundle、HMR（热模块替换）事件流与 SPA dist 都属于注册它们的插件。路由匹配顺序固定不变：先在整张表中匹配精确 route，再匹配最长前缀，最后交给回退 handler。它只服务浏览器；Electron 通过 `file://` 加载 dist，并经 IPC 桥接承载 fetch。
 
 ## 目录
 
@@ -43,6 +43,10 @@ kind: "package-reference"
 ### 注册路由
 
 `register(route)` 添加具名的 `exact`／`prefix` HTTP route，`registerUpgrade(route)` 为精确 pathname 添加 upgrade route，两者返回的 disposer 都会移除注册。同一张表内的重复路径会抛错——route 模式是组合层约定，冲突即配置错误。HTTP 匹配先在整张表中匹配精确 route，再匹配最长前缀，最后交给回退 handler；upgrade 只做精确匹配，未命中连接直接关闭。
+
+### 认证席位
+
+`registerAuth(check, challenge)` 占用唯一的请求门禁。检查在 HTTP 路由匹配之前运行——具名路由、回退 handler 与 404 应答同样受控——并在每次 upgrade 分发之前运行，因此需要在整站前置凭据的组合应在此注册，而不是逐个包装 route。门禁拥有凭据语义，服务端拥有拒绝协议：被拒绝的 HTTP 请求返回 401 与注册的 `WWW-Authenticate` 挑战，被拒绝的 upgrade 关闭其 socket，抛错的门禁按拒绝处理并记录失败。HTTP 调用会收到响应对象，门禁可在放行前写入 cookie 之类的产物；upgrade 调用没有响应对象，因此只有已携带 cookie 的请求才能通过 upgrade。已有门禁存活时二次注册会抛错，disposer 释放席位。
 
 ### 回退席位
 
